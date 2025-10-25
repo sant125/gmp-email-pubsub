@@ -395,6 +395,71 @@ Pra produção grande (>10M métricas), managed compensa.
 - Custo sobe rápido com muitas métricas
 - Free tier só no primeiro ano
 
+## Decisão: Preciso criar PodMonitoring?
+
+**Use essa árvore de decisão:**
+
+```
+Seu app expõe /metrics?
+│
+├─ ❌ NÃO
+│   │
+│   └─ ❌ NÃO precisa de PodMonitoring!
+│      Só cria Rules usando métricas automáticas:
+│      - container_memory_* (kubelet)
+│      - container_cpu_* (kubelet)
+│      - kube_pod_status_* (kube-state-metrics)
+│
+│      Exemplo:
+│      apiVersion: monitoring.googleapis.com/v1
+│      kind: Rules
+│      metadata:
+│        name: myapp-infra-alerts
+│      spec:
+│        groups:
+│        - name: infra
+│          rules:
+│          - alert: HighMemory
+│            expr: |
+│              (container_memory_working_set_bytes{pod=~"myapp-.*"}
+│              / container_spec_memory_limit_bytes) > 0.85
+│
+└─ ✅ SIM
+    │
+    └─ Já existe PodMonitoring com label selector que match?
+        │
+        ├─ ✅ SIM
+        │   │
+        │   └─ ❌ NÃO precisa criar!
+        │      O deployment será monitorado automaticamente
+        │
+        └─ ❌ NÃO
+            │
+            └─ ✅ Precisa criar PodMonitoring
+               com selector que faça match com as labels do pod
+
+               Exemplo:
+               apiVersion: monitoring.googleapis.com/v1
+               kind: PodMonitoring
+               metadata:
+                 name: myapp-monitoring
+               spec:
+                 selector:
+                   matchLabels:
+                     app: myapp
+                 endpoints:
+                 - port: metrics
+                   interval: 30s
+```
+
+**Resumo:**
+
+| Cenário | PodMonitoring? | Rules? | Métricas Disponíveis |
+|---------|----------------|--------|---------------------|
+| App SEM /metrics | ❌ Não | ✅ Sim | CPU, mem, status (automáticas) |
+| App COM /metrics (novo) | ✅ Sim | ✅ Sim | CPU, mem, status + custom metrics |
+| App COM /metrics (já tem PodMonitoring matching) | ❌ Não | ✅ Sim | CPU, mem, status + custom metrics |
+
 ## Referências
 
 - Prometheus docs: https://prometheus.io/docs/

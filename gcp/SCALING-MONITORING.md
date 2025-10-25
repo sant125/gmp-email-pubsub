@@ -476,10 +476,48 @@ spec:
 
 ### Se o deployment NÃO expõe `/metrics`:
 
-**Você ainda pode monitorar métricas de infra:**
+**IMPORTANTE:** Se seu app não tem endpoint `/metrics`, você:
+- ❌ **NÃO** precisa criar `PodMonitoring`
+- ✅ **SIM** pode criar `Rules` para alertas de infraestrutura
+
+**Por quê?** Métricas de CPU, memória e status dos pods **já existem automaticamente** via kubelet e kube-state-metrics. O GMP coleta essas métricas sem você fazer nada.
+
+**Exemplo prático:**
 
 ```yaml
-# Alerta de memória alta (usa kubelet, não precisa /metrics)
+# deployment.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: myapp
+  namespace: production
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: myapp
+  template:
+    metadata:
+      labels:
+        app: myapp
+        # ❌ NÃO tem label "monitoring: enabled"
+    spec:
+      containers:
+      - name: app
+        image: myapp:v1.0
+        # ❌ NÃO expõe porta /metrics
+        ports:
+        - containerPort: 8080
+          name: http
+```
+
+**Nesse caso, você faz:**
+
+```yaml
+# ❌ NÃO CRIA PodMonitoring
+# (Porque o app não tem /metrics pra fazer scrape)
+
+# ✅ SÓ CRIA Rules (alertas de infraestrutura)
 apiVersion: monitoring.googleapis.com/v1
 kind: Rules
 metadata:
@@ -488,20 +526,96 @@ metadata:
 spec:
   groups:
   - name: infra
+    interval: 30s
     rules:
+    # Memória alta (usa métrica do kubelet)
     - alert: MyAppHighMemory
       expr: |
-        (container_memory_working_set_bytes{namespace="production", pod=~"myapp-.*"}
-        / container_spec_memory_limit_bytes) > 0.85
+        (container_memory_working_set_bytes{namespace="production", pod=~"myapp-.*", container!=""}
+        / container_spec_memory_limit_bytes{namespace="production", pod=~"myapp-.*", container!=""}) > 0.85
       for: 5m
+      labels:
+        severity: warning
+      annotations:
+        summary: "MyApp usando muita memória"
+        description: "Pod {{ $labels.pod }}: {{ $value | humanizePercentage }}"
 
+    # Pod não está Running (usa métrica do kube-state-metrics)
     - alert: MyAppPodNotRunning
       expr: |
-        kube_pod_status_phase{namespace="production", pod=~"myapp-.*", phase!="Running"} == 1
+        kube_pod_status_phase{namespace="production", pod=~"myapp-.*", phase!="Running", phase!="Succeeded"} == 1
       for: 5m
+      labels:
+        severity: critical
+      annotations:
+        summary: "Pod do MyApp em estado {{ $labels.phase }}"
+        description: "Pod {{ $labels.pod }} está em {{ $labels.phase }}"
+
+    # CPU throttling (usa métrica do kubelet)
+    - alert: MyAppCPUThrottling
+      expr: |
+        rate(container_cpu_cfs_throttled_seconds_total{namespace="production", pod=~"myapp-.*"}[5m]) > 0.5
+      for: 10m
+      labels:
+        severity: warning
+      annotations:
+        summary: "MyApp com CPU throttling"
+        description: "Pod {{ $labels.pod }} está sendo throttled"
+
+    # Pods reiniciando muito (usa métrica do kube-state-metrics)
+    - alert: MyAppCrashLooping
+      expr: |
+        rate(kube_pod_container_status_restarts_total{namespace="production", pod=~"myapp-.*"}[15m]) > 0
+      for: 5m
+      labels:
+        severity: critical
+      annotations:
+        summary: "MyApp reiniciando frequentemente"
+        description: "Pod {{ $labels.pod }} crashlooping"
 ```
 
-**Essas métricas JÁ EXISTEM!** Não precisa de PodMonitoring.
+**Essas métricas JÁ EXISTEM no GMP!** Não precisa de PodMonitoring.
+
+**Resumo visual:**
+
+```
+Cenário 1: App SEM /metrics
+┌─────────────────────────────────┐
+│  Deployment (sem /metrics)      │
+│  - Não expõe porta metrics      │
+│  - Não tem instrumentação       │
+└─────────────────────────────────┘
+         │
+         ├─ ❌ NÃO cria PodMonitoring
+         │
+         └─ ✅ Cria Rules (alertas de infra)
+                  ↓
+            Usa métricas automáticas:
+            - container_memory_* (kubelet)
+            - container_cpu_* (kubelet)
+            - kube_pod_status_* (kube-state-metrics)
+
+Cenário 2: App COM /metrics
+┌─────────────────────────────────┐
+│  Deployment (com /metrics)      │
+│  - Expõe porta 8080/metrics     │
+│  - Tem instrumentação Prometheus│
+└─────────────────────────────────┘
+         │
+         ├─ ✅ Cria PodMonitoring
+         │     ↓
+         │   Coleta métricas custom:
+         │   - http_requests_total
+         │   - myapp_orders_processed
+         │
+         └─ ✅ Cria Rules (alertas de app + infra)
+                  ↓
+            Usa métricas custom + automáticas:
+            - http_requests_total (app)
+            - myapp_* (app)
+            - container_memory_* (kubelet)
+            - kube_pod_status_* (kube-state-metrics)
+```
 
 ---
 
@@ -614,5 +728,36 @@ kubectl get rules -n production myapp-alerts
 | Métricas de infra (CPU/mem) | ✅ Sim | Nenhuma (kubelet coleta) |
 | Métricas de app (custom) | ❌ Não | Instrumentar app + PodMonitoring |
 
+### Decisão: Preciso criar PodMonitoring?
+
+**Use essa árvore de decisão:**
+
+```
+Seu app expõe /metrics?
+│
+├─ ❌ NÃO
+│   │
+│   └─ Não precisa de PodMonitoring!
+│      Só cria Rules usando métricas automáticas:
+│      - container_memory_* (kubelet)
+│      - container_cpu_* (kubelet)
+│      - kube_pod_status_* (kube-state-metrics)
+│
+└─ ✅ SIM
+    │
+    └─ Já existe PodMonitoring com label selector que match?
+        │
+        ├─ ✅ SIM
+        │   │
+        │   └─ Não precisa criar!
+        │      O deployment será monitorado automaticamente
+        │
+        └─ ❌ NÃO
+            │
+            └─ Precisa criar PodMonitoring
+               com selector que faça match com as labels do pod
+```
+
 **Regra de ouro:**
-O PodMonitoring usa **label selector**. Se o novo pod tem as labels que o selector procura, é monitorado automaticamente. Se não, você precisa criar/atualizar o PodMonitoring.
+- **App SEM /metrics** → ❌ NÃO cria PodMonitoring (usa métricas automáticas do kubelet/kube-state-metrics)
+- **App COM /metrics** → ✅ Cria PodMonitoring OU usa um existente com label selector que match

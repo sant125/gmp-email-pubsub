@@ -223,13 +223,13 @@ Qual foi sua maior dificuldade implementando observabilidade no K8s? 👇
 
 ---
 
-## Versão 2: Mais Direta (post médio)
+## Versão 2: Mais Direta (post médio) - COM ARQUITETURA E API
 
 ---
 
 **Google Managed Prometheus: O que aprendi implementando alertas no GKE**
 
-Implementei um sistema de observabilidade completo usando GMP e descobri 2 coisas que ninguém te conta:
+Implementei um sistema de observabilidade completo usando GMP e descobri 3 coisas que ninguém te conta:
 
 **1️⃣ Você provavelmente não precisa instrumentar sua app**
 
@@ -266,34 +266,189 @@ Solução que funciona:
 expr: sum(up{job="myapp"}) < 1
 ```
 
-**Arquitetura do GMP em 30 segundos:**
+**3️⃣ A API do AlertManager é essencial pra debug**
 
-🔹 **Collector** → scrape /metrics dos pods
-🔹 **Rule Evaluator** → executa queries PromQL
-🔹 **AlertManager** → envia notificações
-🔹 **Operator** → gerencia os CRDs
+Quando o alerta não chega, não fica adivinhando. O AlertManager tem uma API REST que mostra tudo:
 
-Tudo gerenciado pelo Google. Você só cria os YAMLs.
+```bash
+# Port-forward pro AlertManager
+kubectl port-forward -n gmp-system svc/alertmanager 9093:9093
+
+# Ver alertas ativos (FIRING, PENDING, RESOLVED)
+curl http://localhost:9093/api/v2/alerts
+
+# Ver config aplicada (SMTP, receivers, routes)
+curl http://localhost:9093/api/v2/status
+```
+
+Já me salvou várias vezes:
+- Email não chegava? API mostrou que o alerta tava em "suppressed" (silenciado)
+- Alerta não disparava? API mostrou que a query não matchava nada
+- Config SMTP errada? API mostrou erro de autenticação
+
+**Arquitetura: Como tudo se conecta**
+
+O GMP não é uma caixa preta. Tem 4 componentes rodando no seu cluster:
+
+```
+┌─────────────────────────────────────────────┐
+│              Seu Cluster GKE                │
+│                                             │
+│  ┌─────────┐  ┌─────────┐                  │
+│  │  Pod 1  │  │  Pod 2  │                  │
+│  │/metrics │  │/metrics │                  │
+│  └────┬────┘  └────┬────┘                  │
+│       │            │                        │
+│  ┌────▼────────────▼─────┐  (gmp-system)   │
+│  │  1. Collector          │                 │
+│  │  Scrape a cada 30s     │                 │
+│  └────────┬───────────────┘                 │
+│           │                                 │
+│  ┌────────▼───────────────┐                 │
+│  │  2. Rule Evaluator     │                 │
+│  │  Executa PromQL        │                 │
+│  └────────┬───────────────┘                 │
+│           │                                 │
+│  ┌────────▼───────────────┐                 │
+│  │  3. AlertManager       │                 │
+│  │  Agrupa/Roteia         │                 │
+│  └────────┬───────────────┘                 │
+└───────────┼─────────────────────────────────┘
+            │
+            ▼
+    ┌───────────────┐
+    │  Gmail SMTP   │
+    │  ou SendGrid  │
+    └───────┬───────┘
+            │
+            ▼
+          📧 Email
+```
+
+**O que cada componente faz:**
+
+1. **Collector** (DaemonSet)
+   - Lê os CRDs `PodMonitoring` que você cria
+   - Faz scrape dos endpoints /metrics
+   - Envia dados pro backend gerenciado do GMP
+
+2. **Rule Evaluator** (Deployment)
+   - Lê os CRDs `Rules` que você cria
+   - Executa queries PromQL contra o backend
+   - Marca alertas como PENDING → FIRING → RESOLVED
+
+3. **AlertManager** (StatefulSet)
+   - Recebe alertas do Rule Evaluator
+   - Agrupa alertas similares (evita spam)
+   - Envia pra receivers (Email, Slack, PagerDuty)
+   - Expõe API REST na porta 9093 (debug!)
+
+4. **Operator** (Deployment)
+   - Gerencia o ciclo de vida dos CRDs
+   - Reconcilia estado desejado vs atual
+
+**Timeline: Do pod cair até o email chegar**
+
+```
+T+0s    Pod morre → up = 0
+T+30s   Collector detecta → envia pro GMP
+T+60s   Rule Evaluator: passou 1min (for: 1m) → FIRING
+T+70s   AlertManager: aguarda group_wait (10s) → envia email
+T+75s   📧 Email chega
+```
+
+Total: ~75 segundos. É o esperado, não é bug!
 
 **3 CRDs que você precisa conhecer:**
 
-`PodMonitoring` → O que coletar
-`Rules` → Quando alertar
-`OperatorConfig` → Config global (SMTP, etc)
+`PodMonitoring` → O que coletar (selector, porta, intervalo)
+`Rules` → Quando alertar (PromQL, for, labels)
+`OperatorConfig` → Config global (SMTP, receivers) - TEM que estar em `gmp-public`!
 
 **Por que GMP vs Prometheus self-hosted?**
 
 ✅ Storage gerenciado (24 meses retenção)
 ✅ Scaling automático
 ✅ Alta disponibilidade inclusa
-✅ AlertManager gerenciado
+✅ AlertManager gerenciado com API
 ✅ 50GB/mês grátis
 
 Você só paga o cluster GKE (~$50-75/mês).
 
-Documentei tudo com exemplos práticos: [link do repo]
+**Vamos ver isso funcionando na prática?**
 
-Qual sua experiência com Prometheus gerenciado? 👇
+Simulei um problema real: escalar o app pra 0 réplicas (como se tivesse crashado).
+
+```bash
+# T+0s: Derrubo todos os pods
+kubectl scale deployment sample-app --replicas=0
+
+# Pods começam a terminar...
+```
+
+**O que acontece nos bastidores:**
+
+```
+T+0s    kubectl scale --replicas=0
+        └─ Pods começam a terminar
+
+T+30s   Collector faz scrape
+        └─ Detecta up=0
+        └─ Envia pro backend GMP
+
+T+60s   Rule Evaluator executa query
+        └─ sum(up{...}) < 1 → true há 1min
+        └─ Alerta muda: PENDING → FIRING
+
+T+70s   AlertManager processa
+        └─ Aguarda group_wait (10s)
+        └─ Agrupa alertas similares
+        └─ Envia via SMTP
+
+T+75s   📧 Email chega!
+        Subject: [FIRING:1] PodDown default/sample-app
+```
+
+**Como validei?** Usando a API do AlertManager:
+
+```bash
+kubectl port-forward -n gmp-system svc/alertmanager 9093:9093
+curl http://localhost:9093/api/v2/alerts | jq
+```
+
+Retorna o alerta ativo:
+```json
+{
+  "labels": {
+    "alertname": "PodDown",
+    "severity": "critical"
+  },
+  "status": {
+    "state": "active"
+  },
+  "startsAt": "2025-10-25T20:05:00Z"
+}
+```
+
+[Imagem 1: Pods do GMP rodando (gmp-system)]
+[Imagem 2: App escalado pra 0 - pods em Terminating]
+[Imagem 3: JSON do alerta na API do AlertManager]
+[Imagem 4: Email chegando com [FIRING:1] PodDown]
+
+Total do fluxo: **~75 segundos** do problema até a notificação. Rápido o suficiente pra reagir, mas não tão rápido que gera falso positivo.
+
+**Repositório**
+
+Documentei tudo com exemplos práticos, troubleshooting e API endpoints: [link do repo]
+
+Inclui:
+- Setup completo (~15min)
+- Exemplos de queries que funcionam
+- Como debugar com a API do AlertManager
+- Comandos pra reproduzir essa demo
+- Armadilhas comuns e soluções
+
+Qual sua experiência com Prometheus gerenciado? Já usou a API do AlertManager pra debug? 👇
 
 #Kubernetes #GCP #Observability #SRE #DevOps
 
