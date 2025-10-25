@@ -9,13 +9,13 @@ spec:
     interval: 30s
     rules:
     - alert: PodDown
-      expr: up{job="default/sample-app-monitoring"} == 0 or absent(up{job="default/sample-app-monitoring"})
+      expr: sum(up{job="default/sample-app-monitoring"}) < 1
       for: 1m
       labels:
         severity: critical
       annotations:
         summary: "Pod não está respondendo"
-        description: "Sample-app pods estão down ou ausentes"
+        description: "Sample-app: {{ $value }} pods respondendo (esperado: >= 1)"
     
     - alert: HighMemoryUsage
       expr: |

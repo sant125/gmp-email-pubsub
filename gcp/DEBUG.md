@@ -107,21 +107,43 @@ up{job="default/sample-app-monitoring"}
 
 ## Problemas que encontramos
 
-### 1. Sintaxe do absent() não funciona direito
+### 1. ⚠️ NUNCA use `absent()` em alertas que precisam resolver
 
-**Problema:**
-Tentamos usar `absent(up{job="..."})` pra detectar quando o job sumisse completamente. Mas o GMP não aceita `absent()` sozinho, precisa combinar com outra condição.
+**Problema CRÍTICO:**
+O `or absent(up{...})` impede que o alerta **resolva** quando os pods voltam!
 
-**Solução:**
-Usa `up == 0 or absent(up)`:
-
+Query problemática:
 ```yaml
+# ❌ ERRADO - Alerta nunca resolve
 expr: up{job="default/sample-app-monitoring"} == 0 or absent(up{job="default/sample-app-monitoring"})
 ```
 
-Isso funciona porque:
-- Se o pod existir mas tiver down: `up == 0` pega
-- Se o job sumir completamente: `absent()` pega
+**Por que não funciona:**
+- Quando pods estão down: `up == 0` → alerta DISPARA ✅
+- Quando pods voltam: `up == 1`, mas `absent(up)` pode ainda retornar `true` se houver séries temporais antigas
+- Resultado: alerta fica **ativo pra sempre**
+
+**Solução CORRETA:**
+Use `sum()` para agregar todos os pods:
+
+```yaml
+# ✅ CORRETO - Alerta dispara E resolve
+expr: sum(up{job="default/sample-app-monitoring"}) < 1
+```
+
+**Como funciona:**
+- Quando todos os pods estão down: `sum(up) = 0` → dispara ✅
+- Quando pelo menos 1 pod volta: `sum(up) >= 1` → resolve ✅
+- Simples, confiável e eficiente
+
+**Alternativa (usando kube-state-metrics):**
+```yaml
+# Alerta quando pod não está Running
+expr: kube_pod_status_phase{namespace="default", pod=~"sample-app-.*", phase!="Running"} == 1
+```
+
+**Quando usar `absent()`:**
+Apenas em queries de observação, nunca em alertas que precisam resolver automaticamente.
 
 ### 2. Namespace das Rules importa
 

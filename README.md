@@ -24,18 +24,26 @@ Com gerenciado você paga mais, mas não precisa se preocupar com isso.
 ```
 .
 ├── README.md                    # você tá aqui
-├── LEARNING.md                  # conceitos básicos
-├── ARCHITECTURE.md              # arquitetura
-├── COSTS.md                     # custos
+├── LEARNING.md                  # conceitos básicos de Prometheus
+├── ARCHITECTURE.md              # arquitetura geral
+├── COSTS.md                     # estimativa de custos
+│
 ├── aws/                         # AWS (AMP + SNS)
 │   ├── setup-guide.md
 │   ├── iam-policies/
 │   ├── prometheus-config/
 │   └── k8s-manifests/
+│
 └── gcp/                         # GCP (GMP + SMTP)
-    ├── setup-guide.md
-    ├── DEBUG.md                 # API endpoints e problemas comuns
+    ├── setup-guide.md           # Passo a passo do setup
+    ├── DEBUG.md                 # API endpoints e troubleshooting
+    ├── GMP-COMPONENTS.md        # Como funciona cada componente do GMP
+    ├── METRICS-SOURCES.md       # Métricas: kubelet vs aplicação
     └── k8s-manifests/
+        ├── alertmanager-config.yaml
+        ├── alerting-rules.yaml  # ✅ Query corrigida (sem absent!)
+        ├── pod-monitoring.yaml
+        └── sample-app.yaml
 ```
 
 ## Quick start
@@ -49,8 +57,10 @@ Dá uma olhada no `LEARNING.md` antes. Explica os conceitos básicos: métricas,
 **GCP:**
 ```bash
 cd gcp
-cat setup-guide.md  # ~15min, só kubectl
-cat DEBUG.md        # endpoints da API, problemas que tive
+cat setup-guide.md       # ~15min, só kubectl
+cat GMP-COMPONENTS.md    # como funcionam os componentes do GMP
+cat METRICS-SOURCES.md   # kubelet vs app: quando usar cada um
+cat DEBUG.md             # endpoints da API, troubleshooting
 ```
 
 **AWS:**
@@ -109,11 +119,31 @@ Tem mais detalhes no `gcp/DEBUG.md` ou nos setup guides.
 
 ## O que aprendi montando isso
 
-- Coletar métricas de pods (PodMonitoring no GCP)
-- Escrever queries PromQL (tem pegadinha com os labels)
-- Regras de alerta (o `absent()` precisa ser combinado com `up == 0`)
-- AlertManager e roteamento (SMTP é mais simples que parece)
-- Debug quando nada funciona (namespace errado é clássico)
+### Componentes do GMP
+- **Collector**: Faz scrape dos pods e envia pro backend gerenciado
+- **Rule Evaluator**: Executa queries PromQL e dispara alertas
+- **AlertManager**: Agrupa e roteia notificações (SMTP, Slack, etc)
+- **Operator**: Gerencia os CRDs (PodMonitoring, Rules, OperatorConfig)
+
+### Métricas
+- **Kubelet (automáticas)**: CPU, memória, disco, rede - já existem sem fazer nada
+- **kube-state-metrics (automáticas)**: Status dos pods, deployments, nodes
+- **Aplicação (custom)**: Request rate, latência, métricas de negócio - precisa instrumentar
+
+### Queries PromQL
+- ❌ **NUNCA use** `or absent()` em alertas - impede resolução
+- ✅ **Use** `sum(up{...}) < 1` para alertas que precisam resolver
+- Ou use métricas do kube-state-metrics: `kube_pod_status_phase{phase!="Running"}`
+
+### AlertManager
+- Configuração via Secret em `gmp-public` (YAML com SMTP)
+- Agrupa alertas similares (`group_wait`, `group_interval`)
+- Envia notificações de FIRING e RESOLVED (se `send_resolved: true`)
+
+### Debug
+- Namespace errado é o problema mais comum
+- API REST do AlertManager é útil pra ver alertas ativos
+- Logs do Collector mostram se scrape está funcionando
 
 Isso aqui é lab, não produção. Se for usar de verdade você vai precisar:
 - Mais alertas (CPU, disco, latência, erros da app)
