@@ -1,0 +1,23 @@
+serviceAccounts:
+  server:
+    create: false
+    name: amp-iamproxy-ingest
+
+server:
+  remoteWrite:
+    - url: SUBSTITUA_PELA_URL_DO_WORKSPACE
+      sigv4:
+        region: us-east-1
+      queue_config:
+        max_samples_per_send: 1000
+        max_shards: 200
+        capacity: 2500
+  
+  persistentVolume:
+    enabled: false
+
+alertmanager:
+  enabled: false
+
+pushgateway:
+  enabled: false

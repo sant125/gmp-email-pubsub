@@ -1,0 +1,29 @@
+apiVersion: monitoring.googleapis.com/v1
+kind: Rules
+metadata:
+  name: lab-alerts
+  namespace: default
+spec:
+  groups:
+  - name: lab_alerts
+    interval: 30s
+    rules:
+    - alert: PodDown
+      expr: up{job="sample-app"} == 0
+      for: 1m
+      labels:
+        severity: critical
+      annotations:
+        summary: "Pod não está respondendo"
+        description: "Pod {{ $labels.pod }} está down"
+    
+    - alert: HighMemoryUsage
+      expr: |
+        (container_memory_working_set_bytes{container!=""} 
+        / container_spec_memory_limit_bytes{container!=""}) > 0.8
+      for: 2m
+      labels:
+        severity: warning
+      annotations:
+        summary: "Uso de memória alto"
+        description: "Container {{ $labels.container }} usando >80% memória"

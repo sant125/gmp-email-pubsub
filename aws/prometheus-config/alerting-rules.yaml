@@ -1,0 +1,33 @@
+groups:
+  - name: lab_alerts
+    interval: 30s
+    rules:
+    - alert: PodDown
+      expr: up{job="kubernetes-pods"} == 0
+      for: 1m
+      labels:
+        severity: critical
+      annotations:
+        summary: "Pod não está respondendo"
+        description: "Pod {{ $labels.pod }} no namespace {{ $labels.namespace }} está down há mais de 1 minuto"
+    
+    - alert: HighMemoryUsage
+      expr: |
+        (container_memory_working_set_bytes{container!="", container!="POD"} 
+        / container_spec_memory_limit_bytes{container!="", container!="POD"}) > 0.8
+      for: 2m
+      labels:
+        severity: warning
+      annotations:
+        summary: "Uso de memória alto"
+        description: "Container {{ $labels.container }} no pod {{ $labels.pod }} usando {{ $value | humanizePercentage }} de memória"
+    
+    - alert: HighCPUUsage
+      expr: |
+        rate(container_cpu_usage_seconds_total{container!="", container!="POD"}[5m]) > 0.8
+      for: 2m
+      labels:
+        severity: warning
+      annotations:
+        summary: "Uso de CPU alto"
+        description: "Container {{ $labels.container }} no pod {{ $labels.pod }} com CPU acima de 80%"

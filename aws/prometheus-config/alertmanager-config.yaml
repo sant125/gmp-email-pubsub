@@ -1,0 +1,32 @@
+alertmanager_config: |
+  route:
+    receiver: 'sns-alerts'
+    group_by: ['alertname', 'severity', 'namespace']
+    group_wait: 10s
+    group_interval: 5m
+    repeat_interval: 3h
+  
+  receivers:
+  - name: 'sns-alerts'
+    sns_configs:
+    - topic_arn: SUBSTITUA_PELO_SEU_TOPIC_ARN
+      sigv4:
+        region: us-east-1
+      subject: '[PROMETHEUS {{ .Status | toUpper }}] {{ .GroupLabels.alertname }}'
+      message: |
+        Status: {{ .Status }}
+        {{ if eq .Status "firing" }}Alertas Ativos:{{ else }}Alertas Resolvidos:{{ end }}
+        
+        {{ range .Alerts }}
+        ---
+        Alerta: {{ .Labels.alertname }}
+        Severidade: {{ .Labels.severity }}
+        Namespace: {{ .Labels.namespace }}
+        Pod: {{ .Labels.pod }}
+        Descrição: {{ .Annotations.description }}
+        Começou em: {{ .StartsAt }}
+        {{ if ne .EndsAt "0001-01-01T00:00:00Z" }}Resolvido em: {{ .EndsAt }}{{ end }}
+        {{ end }}
+      attributes:
+        severity: '{{ .CommonLabels.severity }}'
+        alertname: '{{ .CommonLabels.alertname }}'
