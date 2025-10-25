@@ -7,10 +7,10 @@ stringData:
   alertmanager.yaml: |
     global:
       resolve_timeout: 5m
-      smtp_from: 'seu-email@gmail.com'
+      smtp_from: 'santiago.rosa991412@gmail.com'
       smtp_smarthost: 'smtp.gmail.com:587'
-      smtp_auth_username: 'seu-email@gmail.com'
-      smtp_auth_password: 'sua-app-password-aqui'  # App Password do Gmail
+      smtp_auth_username: 'santiago.rosa991412@gmail.com'
+      smtp_auth_password: 'rfeb zvlp ksmb wblc'  # App Password do Gmail
       smtp_require_tls: true
 
     route:
@@ -23,9 +23,10 @@ stringData:
     receivers:
     - name: 'email-alerts'
       email_configs:
-      - to: 'seu-email@gmail.com'
+      - to: 'santiago.paiva1956@gmail.com'
+        send_resolved: true
         headers:
-          Subject: '[{{ .Status | toUpper }}] {{ .GroupLabels.alertname }}'
+          Subject: '[{{ .Status | toUpper }}{{ if eq .Status "firing" }}🔥{{ else }}✅{{ end }}] {{ .GroupLabels.alertname }}'
         html: |
           <h2>Alerta Prometheus</h2>
           <p><strong>Status:</strong> {{ .Status }}</p>
