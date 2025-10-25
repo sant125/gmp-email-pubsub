@@ -1,82 +1,79 @@
 # Lab de Observabilidade em Kubernetes
 
-Projeto pra aprender observabilidade em Kubernetes usando Prometheus gerenciado (AWS ou GCP). Quando algo dá errado no cluster, você recebe email/SMS avisando.
+Projeto de estudo pra testar observabilidade em K8s com Prometheus gerenciado. A ideia é simples: receber alerta quando pod cai ou memória estoura, sem precisar ficar subindo Prometheus na mão.
 
 ## O que tem aqui
 
-Um setup funcional de:
-- Coleta automática de métricas dos pods
-- Regras de alerta customizadas (pod down, memória alta, etc)
-- Notificações via email quando algo quebra
-- Tudo usando serviços gerenciados (zero manutenção de Prometheus)
+- Coleta de métricas rodando (GMP ou AMP)
+- Alertas básicos (pod down, memória >80%)
+- Email quando dispara
+- Tudo gerenciado pela cloud (menos coisa pra quebrar)
 
-## Por que usar serviços gerenciados?
+## Por que gerenciado?
 
-Você não precisa:
-- Gerenciar storage do Prometheus
-- Se preocupar com escalabilidade
-- Configurar backup e alta disponibilidade
-- Passar noite acordado quando o Prometheus cai
+Porque gerenciar Prometheus no cluster é um saco:
+- Precisa configurar storage persistente
+- Escalabilidade vira problema rápido
+- Se o Prometheus cai, você fica cego
+- Backup é sua responsabilidade
 
-É mais caro que self-hosted? Sim. Mas você economiza tempo e dor de cabeça.
+Com gerenciado você paga mais, mas não precisa se preocupar com isso.
 
 ## Estrutura do projeto
 
 ```
 .
-├── README.md                    # você está aqui
-├── LEARNING.md                  # explicação didática dos conceitos
-├── ARCHITECTURE.md              # detalhes técnicos da arquitetura
-├── COSTS.md                     # quanto vai custar
-├── aws/                         # setup AWS (AMP + SNS)
+├── README.md                    # você tá aqui
+├── LEARNING.md                  # conceitos básicos
+├── ARCHITECTURE.md              # arquitetura
+├── COSTS.md                     # custos
+├── aws/                         # AWS (AMP + SNS)
 │   ├── setup-guide.md
 │   ├── iam-policies/
 │   ├── prometheus-config/
 │   └── k8s-manifests/
-└── gcp/                         # setup GCP (GMP + SMTP direto)
+└── gcp/                         # GCP (GMP + SMTP)
     ├── setup-guide.md
-    ├── iam-policies/
-    ├── prometheus-config/
+    ├── DEBUG.md                 # API endpoints e problemas comuns
     └── k8s-manifests/
 ```
 
 ## Quick start
 
-### Primeira vez com observabilidade?
+### Nunca mexeu com Prometheus?
 
-Lê o `LEARNING.md` antes. Ele explica os conceitos de Prometheus, métricas, alertas, etc.
+Dá uma olhada no `LEARNING.md` antes. Explica os conceitos básicos: métricas, PromQL, alertas, etc.
 
-### Já sabe o que tá fazendo?
-
-**GCP (mais simples):**
-```bash
-cd gcp
-cat setup-guide.md
-# 15 minutos de setup, tudo via kubectl apply
-```
-
-**AWS (mais completo):**
-```bash
-cd aws
-cat setup-guide.md
-# 30 minutos de setup, envolve IAM e SNS
-```
-
-## Diferenças entre AWS e GCP
+### Já conhece?
 
 **GCP:**
-- Setup mais rápido (só YAML)
-- Observabilidade grátis (até 50GB/mês)
-- AlertManager já integrado
-- Precisa configurar SMTP externo
+```bash
+cd gcp
+cat setup-guide.md  # ~15min, só kubectl
+cat DEBUG.md        # endpoints da API, problemas que tive
+```
 
 **AWS:**
-- Setup mais trabalhoso (IAM, SNS, etc)
-- Notificações nativas via SNS
-- Free tier limitado (primeiro ano)
-- Mais recursos de integração
+```bash
+cd aws
+cat setup-guide.md  # ~30min, tem IAM e SNS
+```
 
-Ambos funcionam bem. Escolhe o que você já usa ou quer aprender.
+## AWS vs GCP
+
+**GCP:**
+- Mais rápido de configurar (só YAML)
+- GMP grátis (50GB/mês)
+- AlertManager incluso
+- SMTP externo (Gmail, SendGrid, etc)
+
+**AWS:**
+- Mais config (IAM, SNS)
+- SNS pra notificações
+- Free tier só no primeiro ano
+- Mais integrado com AWS
+
+Usa o que você já conhece.
 
 ## Quanto custa?
 
@@ -90,45 +87,42 @@ A parte de observabilidade em si (Prometheus) é grátis no GCP e quase grátis 
 
 ## Troubleshooting
 
-**Métricas não aparecem:**
-- Verifica se o collector/agent tá rodando
-- Checa se o app expõe `/metrics`
-- Confirma que o PodMonitoring/ServiceMonitor tá certo
-- GCP: `kubectl get podmonitoring -A`
-- AWS: checa logs do prometheus-agent
+**Métrica não aparece:**
+- Collector rodando? `kubectl get pods -n gmp-system`
+- App expõe `/metrics`? Testa com curl
+- PodMonitoring tá certo? `kubectl get podmonitoring -A`
+- Labels do pod batem com o selector?
 
-**Alertas não disparam:**
-- Verifica se as Rules foram criadas
-- Testa a query PromQL manualmente
-- Confirma o namespace (GCP precisa ser `gmp-public`)
-- GCP: `kubectl get rules -A`
-- AWS: checa o AlertManager
+**Alerta não dispara:**
+- Rule foi criada? `kubectl get rules -A`
+- Query PromQL tá certa? Testa no Metrics Explorer
+- Namespace correto? (GCP precisa `gmp-public` pra config)
+- Olha status: `kubectl describe rules -n default`
 
-**Notificações não chegam:**
-- GCP: Confere Gmail App Password e SMTP
-- AWS: Verifica subscription do SNS (confirma o email)
-- Olha a pasta de spam
-- Testa manualmente (força um alerta pra ver se chega)
+**Email não chega:**
+- GCP: App Password do Gmail tá correta?
+- AWS: Confirmou o subscription do SNS?
+- Checa spam
+- Força um alerta derrubando pods: `kubectl scale deployment sample-app --replicas=0`
 
-Mais detalhes de troubleshooting nos setup guides específicos.
+Tem mais detalhes no `gcp/DEBUG.md` ou nos setup guides.
 
-## O que você vai aprender
+## O que aprendi montando isso
 
-- Como coletar métricas de pods no Kubernetes
-- Escrever queries PromQL pra buscar métricas
-- Criar regras de alerta customizadas
-- Configurar roteamento de alertas (email, slack, pagerduty)
-- Debugar quando métricas não aparecem
-- Usar Prometheus gerenciado vs self-hosted
+- Coletar métricas de pods (PodMonitoring no GCP)
+- Escrever queries PromQL (tem pegadinha com os labels)
+- Regras de alerta (o `absent()` precisa ser combinado com `up == 0`)
+- AlertManager e roteamento (SMTP é mais simples que parece)
+- Debug quando nada funciona (namespace errado é clássico)
 
-Esse é um projeto de lab. Se for usar em produção, você vai precisar:
-- Alertas mais sofisticados (ver awesome-prometheus-alerts)
-- Múltiplos receivers (email, slack, pagerduty)
-- Silenciamento durante deploys
-- Dashboards customizados
-- Monitoramento de infra (nodes, disk, network)
+Isso aqui é lab, não produção. Se for usar de verdade você vai precisar:
+- Mais alertas (CPU, disco, latência, erros da app)
+- Múltiplos destinos (email, Slack, PagerDuty)
+- Silence durante deploy
+- Dashboards
+- Monitorar a infra também (nodes, network)
 
-Mas o básico tá aqui e funciona.
+Mas dá pra começar com isso.
 
 ## Contribuindo
 

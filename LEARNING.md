@@ -1,16 +1,16 @@
-# Guia de Aprendizado: Observabilidade com Prometheus
+# Observabilidade com Prometheus
 
-Esse documento explica os conceitos por trás do projeto. Se você só quer fazer funcionar, vai direto pro `gcp/setup-guide.md` ou `aws/setup-guide.md`.
+Conceitos básicos. Se só quer fazer rodar, pula direto pro setup guide.
 
 ## Por que observabilidade?
 
-Quando você sobe uma aplicação em produção, precisa saber:
-- Ela tá funcionando?
-- Tem algum pod travado?
-- Memória/CPU tão estourando?
-- Tem erro acontecendo?
+Você precisa saber:
+- App tá rodando?
+- Algum pod travado?
+- Memória/CPU estourando?
+- Erros acontecendo?
 
-Sem observabilidade, você só descobre quando usuário reclama. Com observabilidade, você sabe antes.
+Sem monitoramento você descobre quando usuário reclama. Com monitoramento você vê antes.
 
 ## O que é Prometheus?
 
@@ -289,39 +289,26 @@ Você não vê pod do AlertManager no cluster. Tudo roda como serviço gerenciad
 
 Tempo total: ~2-3 minutos desde o pod cair até o email chegar.
 
-## Namespace: por que importa?
+## Namespace no GMP
 
-No GMP, o namespace é importante:
+**gmp-public**: Configs do GMP (Rules, OperatorConfig, Secrets do AlertManager)
 
-**gmp-public**: Onde o GMP procura configs (Rules, OperatorConfig, Secrets)
+**gmp-system**: Pods gerenciados (não meche)
 
-**gmp-system**: Onde ficam os pods gerenciados (você não meche)
+**default** (ou outro): Seus apps
 
-**default** (ou qualquer outro): Onde ficam seus apps
-
-Se você colocar o Rules no namespace errado:
+Pegadinha: Rules pode ficar em qualquer namespace, mas a gente deixou em `default` junto com o app. O importante é que o Secret do AlertManager TEM que estar em `gmp-public`.
 
 ```yaml
-# ERRADO
-apiVersion: monitoring.googleapis.com/v1
-kind: Rules
+# AlertManager config - PRECISA ser gmp-public
+apiVersion: v1
+kind: Secret
 metadata:
-  name: meu-alert
-  namespace: default  # ❌
+  name: alertmanager-config
+  namespace: gmp-public  # aqui importa
 ```
 
-O GMP não vai achar. Tem que ser:
-
-```yaml
-# CERTO
-apiVersion: monitoring.googleapis.com/v1
-kind: Rules
-metadata:
-  name: meu-alert
-  namespace: gmp-public  # ✅
-```
-
-Mas o `PodMonitoring` pode ficar em qualquer namespace (geralmente fica junto com o app).
+PodMonitoring pode ficar onde quiser (geralmente junto com o app).
 
 ## SMTP: como funciona o envio de email?
 

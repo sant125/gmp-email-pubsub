@@ -2,20 +2,20 @@ apiVersion: monitoring.googleapis.com/v1
 kind: Rules
 metadata:
   name: lab-alerts
-  namespace: gmp-public
+  namespace: default
 spec:
   groups:
   - name: lab_alerts
     interval: 30s
     rules:
     - alert: PodDown
-      expr: up{job="sample-app"} == 0
+      expr: up{job="default/sample-app-monitoring"} == 0 or absent(up{job="default/sample-app-monitoring"})
       for: 1m
       labels:
         severity: critical
       annotations:
         summary: "Pod não está respondendo"
-        description: "Pod {{ $labels.pod }} está down"
+        description: "Sample-app pods estão down ou ausentes"
     
     - alert: HighMemoryUsage
       expr: |

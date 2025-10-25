@@ -1,26 +1,26 @@
-# GCP Setup - Alertas com Google Managed Prometheus
+# Setup GCP - Google Managed Prometheus
 
-## Arquitetura
+## Como funciona
 
 ```
-Pod (app) → GMP Collector → Managed Prometheus → AlertManager → Gmail SMTP → Email
+Pod → GMP Collector → Managed Prometheus → AlertManager → SMTP → Email
 ```
 
-**O setup é bem simples**: só YAML e kubectl apply. Nada de função serverless, pub/sub ou código.
+É só YAML e kubectl. Sem serverless, sem pub/sub, sem código custom.
 
-## O que é GMP?
+## Google Managed Prometheus
 
-Google Managed Prometheus. É o Prometheus mas gerenciado pelo Google. Você não sobe pods dele, não gerencia storage, não se preocupa com escalabilidade. O Google cuida disso.
+É Prometheus gerenciado. Você não gerencia pods, storage, nada. O Google faz isso.
 
-A parte boa:
-- Não precisa instalar/manter Prometheus
-- Escala sozinho conforme precisa
-- 50GB de métricas por mês de graça (para sempre)
-- AlertManager já vem integrado
+Bom:
+- Sem manutenção
+- Escala automaticamente
+- 50GB/mês grátis (você não vai chegar nisso)
+- AlertManager incluso
 
-A parte "chata":
-- Precisa configurar SMTP externo pra emails (Gmail funciona de boa)
-- Está meio amarrado ao GKE
+Ruim:
+- Precisa SMTP externo (usei Gmail)
+- Meio preso ao GKE
 
 ## Pré-requisitos
 
@@ -76,16 +76,16 @@ kubectl get pods -n gmp-system
 
 Você vai ver pods do tipo `collector`, `rule-evaluator` e outros. Esses são os componentes do GMP que o Google gerencia.
 
-## 3. Configura Gmail App Password
+## 3. Gmail App Password
 
-O AlertManager precisa de SMTP pra enviar email. Gmail funciona bem e é grátis.
+AlertManager precisa de SMTP. Gmail funciona.
 
-1. Vai em https://myaccount.google.com/apppasswords
-2. Cria uma nova App Password (vai pedir pra logar de novo)
-3. Copia a senha de 16 caracteres (tipo: `abcd efgh ijkl mnop`)
-4. Guarda ela, vai usar no próximo passo
+1. https://myaccount.google.com/apppasswords
+2. Cria App Password nova
+3. Copia os 16 caracteres (ex: `abcd efgh ijkl mnop`)
+4. Guarda
 
-Por que App Password e não a senha normal? Porque o Google não deixa apps "menos seguros" usarem sua senha real. A App Password é uma senha específica só pra esse uso.
+Não pode usar sua senha normal, Google bloqueia. App Password é específica pra isso.
 
 ## 4. Configura AlertManager
 
@@ -157,25 +157,22 @@ As Rules também são um CRD do GMP. Aqui você define:
 
 O campo `status.conditions` deve mostrar `ConfigurationCreateSuccess: True`. Se não, tem algo errado.
 
-## 8. Testa o alerta
+## 8. Testa
 
-Agora vamos derrubar os pods pra ver se o alerta dispara:
+Derruba os pods:
 
 ```bash
-# Derruba os pods
-kubectl scale deployment sample-app -n default --replicas=0
-
-# Verifica que não tem mais pods
-kubectl get pods -l app=sample-app
+kubectl scale deployment sample-app --replicas=0
+kubectl get pods -l app=sample-app  # verifica que sumiram
 ```
 
-O que vai acontecer:
-1. **T+0s**: Pods são removidos, métrica `up` vira 0
-2. **T+60s**: Alerta PodDown entra em estado FIRING (por causa do `for: 1m`)
-3. **T+70s**: AlertManager recebe o alerta e processa
-4. **T+80s**: Email é enviado via SMTP
+Timeline:
+1. **T+0s**: Pod morre, `up` vira 0
+2. **T+60s**: Alerta vira FIRING (por causa do `for: 1m`)
+3. **T+70s**: AlertManager pega
+4. **T+80s**: SMTP envia
 
-Checa teu email em uns 2-3 minutos. Se não chegar, olha o spam.
+Email deve chegar em 2-3min. Checa spam se não aparecer.
 
 ```bash
 # Quando testar, volta os pods
@@ -184,7 +181,24 @@ kubectl scale deployment sample-app -n default --replicas=2
 
 Se tiver o `send_resolved: true` (já está na config), você vai receber outro email quando os pods voltarem.
 
-## 9. Debug
+## 9. Endpoints da API
+
+O AlertManager expõe API REST. Útil pra debug:
+
+```bash
+# Port-forward (se não tiver)
+kubectl port-forward -n gmp-system svc/alertmanager 9093:9093
+
+# Ver alertas ativos
+curl http://localhost:9093/api/v2/alerts
+
+# Ver status
+curl http://localhost:9093/api/v2/status
+```
+
+Tem mais endpoints e exemplos no `DEBUG.md`.
+
+## 10. Debug
 
 ### Alertmanager não envia email
 
