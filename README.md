@@ -45,17 +45,18 @@ cat setup-guide.md
 # siga os passos
 ```
 
-### GCP
+### GCP (Mais simples - zero código!)
 ```bash
 cd gcp
 cat setup-guide.md
-# siga os passos
+# Setup com apenas kubectl apply + Gmail SMTP
+# Sem Cloud Functions, sem Pub/Sub, sem código
 ```
 
 ## Custos esperados
 
 **AWS:** ~$145/mês (com free tier: ~$10-15/mês no primeiro ano)
-**GCP:** ~$122/mês (observabilidade fica no free tier permanente)
+**GCP:** ~$50-75/mês (GMP é grátis + GKE Autopilot)
 
 Detalhes completos em `COSTS.md`
 
@@ -65,14 +66,17 @@ Detalhes completos em `COSTS.md`
 - Verifica se o agent tá rodando
 - Checa logs do Prometheus
 - Confirma que o app tá expondo /metrics
+- **GCP:** Checa se GMP tá habilitado no cluster
 
 **Alertas não disparam:**
 - Verifica se as rules foram criadas
 - Testa a query PromQL manualmente
 - Checa se o AlertManager tá ativo
+- **GCP:** Verifica `kubectl get rules -A`
 
 **Notificações não chegam:**
 - Confirma subscription do email/SMS
 - Verifica se confirmou o email
 - Checa pasta de spam
 - Testa mandando uma notificação manual
+- **GCP:** Verifica Gmail App Password e checa logs do Alertmanager
