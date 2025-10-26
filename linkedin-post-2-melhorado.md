@@ -75,12 +75,13 @@ spec:
     interval: 30s
     rules:
     - alert: PodDown
-      expr: sum(up{job="default/sample-app-monitoring"}) < 1
+      expr: kube_deployment_status_replicas_available{deployment="sample-app",namespace="default"} == 0
       for: 1m              # Aguarda 1min antes de disparar
       labels:
         severity: critical
       annotations:
-        summary: "App está down!"
+        summary: "Deployment sem réplicas disponíveis!"
+        description: "Sample-app: {{ $value }} pods respondendo (esperado: >= 1)"
 ```
 
 **OperatorConfig** - Configuração global (SMTP, receivers)
@@ -120,14 +121,15 @@ kubectl get pods -w
 
 ```
 T+0s    kubectl scale --replicas=0
+        └─ Kubernetes atualiza deployment.status
         └─ Pods começam a terminar (Terminating)
 
-T+30s   Collector faz próximo scrape
-        └─ Detecta up=0 (targets down)
+T+30s   Collector do kube-state-metrics faz scrape
+        └─ Detecta replicas_available=0
         └─ Envia pro backend GMP
 
 T+60s   Rule Evaluator executa query
-        └─ sum(up{...}) < 1 → true
+        └─ kube_deployment_status_replicas_available == 0 → true
         └─ Alerta está true há 1min (for: 1m)
         └─ Muda estado: PENDING → FIRING
 
@@ -193,21 +195,42 @@ kubectl scale deployment sample-app --replicas=2
 
 80% dos alertas usam métricas que **já existem**:
 - CPU/Memória → kubelet (cAdvisor)
-- Status de pods → kube-state-metrics
-- A métrica `up` (target health) → GMP
+- Status de deployments/pods → **kube-state-metrics** (a chave!)
+- Network, disk I/O → kubelet
 
 Só precisa instrumentar para:
-- Request rate, latência, erros
-- Métricas de negócio (vendas, filas)
+- Request rate, latência, erros (Golden Signals)
+- Métricas de negócio (vendas, filas, conversões)
 
-**2) A API do AlertManager é essencial**
+**2) Use kube-state-metrics, não a métrica `up` para alertas de disponibilidade**
+
+Essa foi a descoberta mais importante. Tentei várias queries com a métrica `up`:
+
+❌ `sum(up{job="..."}) < 1` → Não dispara quando pods somem
+❌ `up{job="..."} == 0 or absent(up{job="..."})` → Dispara mas nunca resolve
+❌ `count(up{job="..."} == 1) == 0` → Resolve mas não dispara
+
+**Por quê?** No GMP com PodMonitoring, quando não há pods, a métrica `up` **desaparece completamente** (no data). Agregações como `sum()` e `count()` retornam "no data" em vez de 0.
+
+**Solução que funciona:**
+```yaml
+expr: kube_deployment_status_replicas_available{deployment="sample-app"} == 0
+```
+
+Usa **kube-state-metrics** que monitora o estado do Kubernetes diretamente. A métrica existe sempre, mesmo com 0 pods!
+
+✅ Dispara quando deployment tem 0 réplicas
+✅ Resolve quando deployment volta a ter réplicas
+✅ Funciona imediatamente (sem histórico)
+
+**3) A API do AlertManager é essencial**
 
 Quando o alerta não chega, use a API pra debugar:
 - `/api/v2/alerts` → Ver alertas (FIRING, PENDING, RESOLVED)
 - `/api/v2/status` → Ver config aplicada (SMTP, receivers)
 - `/api/v2/silences` → Ver silences ativos
 
-**3) Backend gerenciado = menos preocupação**
+**4) Backend gerenciado = menos preocupação**
 
 O que o Google gerencia:
 ✅ Storage distribuído (24 meses retenção)
@@ -218,6 +241,28 @@ O que o Google gerencia:
 O que você gerencia:
 📝 CRDs (PodMonitoring, Rules, OperatorConfig)
 📝 Secret com SMTP
+
+**Pré-requisito:** PodMonitoring para kube-state-metrics
+
+Se usar métricas do kube-state-metrics (como `kube_deployment_*`), você precisa criar um PodMonitoring para ele:
+
+```yaml
+apiVersion: monitoring.googleapis.com/v1
+kind: PodMonitoring
+metadata:
+  name: kube-state-metrics
+  namespace: gke-managed-cim    # Namespace do kube-state-metrics no GKE
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: gke-managed-kube-state-metrics
+  endpoints:
+  - port: k8s-objects
+    interval: 30s
+    path: /metrics
+```
+
+Depois de 1-2 minutos, as métricas `kube_*` estarão disponíveis no GMP!
 
 ## 💰 Custos observados
 
@@ -249,22 +294,42 @@ Já usou GMP, Amazon Managed Prometheus ou Grafana Cloud? Compartilha a experiê
 
 ## 📸 Imagens sugeridas:
 
-1️⃣ Screenshot: 4 pods do GMP rodando em `gmp-system`
+### 1️⃣ Componentes do GMP rodando
 ```bash
 kubectl get pods -n gmp-system
+# Mostra: alertmanager-0, collector (DaemonSet), rule-evaluator, operator
 ```
 
-2️⃣ Screenshot: App escalado pra 0 réplicas
+### 2️⃣ kube-state-metrics e PodMonitoring
 ```bash
-kubectl get pods  # Mostrando 0/0 ou Terminating
+# Pod do kube-state-metrics
+kubectl get pods -n gke-managed-cim
+
+# PodMonitoring criado
+kubectl get podmonitoring -n gke-managed-cim
 ```
 
-3️⃣ Screenshot: JSON do alerta na API
+### 3️⃣ Deployment escalado para 0
 ```bash
-curl localhost:9093/api/v2/alerts | jq
+kubectl get deployment sample-app -n default
+# Mostra: READY 0/0, AVAILABLE 0
 ```
 
-4️⃣ Screenshot: Email recebido com `[FIRING:1] PodDown`
+### 4️⃣ Rules configurado com kube-state-metrics
+```bash
+kubectl get rules lab-alerts -n default -o yaml | grep -A 5 "expr:"
+# Mostra: kube_deployment_status_replicas_available{...} == 0
+```
+
+### 5️⃣ Alerta ATIVO na API do AlertManager
+```bash
+kubectl port-forward -n gmp-system svc/alertmanager 9094:9093 &
+curl -s http://localhost:9094/api/v2/alerts | jq '.[0] | {alert: .labels.alertname, status: .status.state, startsAt}'
+```
+
+### 6️⃣ Email recebido
+- Screenshot do email com `[FIRING:1] PodDown`
+- Screenshot do email com `[RESOLVED] PodDown` (quando pods voltam)
 
 ---
 
